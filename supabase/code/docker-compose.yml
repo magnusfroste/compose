@@ -154,10 +154,6 @@ services:
       # GOTRUE_HOOK_SEND_EMAIL_URI: "http://host.docker.internal:54321/functions/v1/email_sender"
       # GOTRUE_HOOK_SEND_EMAIL_SECRETS: "v1,whsec_VGhpcyBpcyBhbiBleGFtcGxlIG9mIGEgc2hvcnRlciBCYXNlNjQgc3RyaW5n"
 
-
-
-
-
   rest:
     image: postgrest/postgrest:v12.2.0
     depends_on:
@@ -401,13 +397,15 @@ services:
       - ./volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
       # Use named volume to persist pgsodium decryption key between restarts
       - db-config:/etc/postgresql-custom
+    networks:
+      - n8n_supabase_default
+      - easypanel-n8n
 
   vector:
     image: timberio/vector:0.28.1-alpine
     healthcheck:
       test:
         [
-
           "CMD",
           "wget",
           "--no-verbose",
@@ -463,6 +461,16 @@ services:
       - POOLER_POOL_MODE=transaction
     volumes:
       - ./volumes/pooler/pooler.exs:/etc/pooler/pooler.exs:ro
+    networks:
+      - n8n_supabase_default
+      - easypanel-n8n
 
 volumes:
   db-config:
+
+networks:
+  n8n_supabase_default:
+    driver: bridge
+  easypanel-n8n:
+    external: true
+    name: easypanel-n8n
