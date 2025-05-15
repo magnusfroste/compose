@@ -1,4 +1,123 @@
-# ... (other sections unchanged)
+name: supabase
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  db:
+    image: supabase/postgres:${POSTGRES_VERSION:-15.1.0.10}
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres" ]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./volumes/db/_supabase:/docker-entrypoint-initdb.d
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements,auto_explain", "-c", "search_path=public,extensions", "-c", "cron.database_name=postgres", "-c", "auto_explain.log_min_duration=500ms"]
+    networks:
+      - n8n_supabase_default
+      - easypanel-n8n
+
+  supavisor:
+    image: supabase/supavisor:${SUPAVISOR_VERSION:-1.1.8}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POOLER_PORT: 6543
+      POOLER_TENANT_ID: ${POOLER_TENANT_ID}
+    command: ["start"]
+    networks:
+      - n8n_supabase_default
+      - easypanel-n8n
+
+  auth:
+    image: supabase/auth:${AUTH_VERSION:-2.113.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    environment:
+      PORT: 54321
+      API_EXTERNAL_URL: ${AUTH_URL}
+      SITE_URL: ${SITE_URL}
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_DISABLE_SIGNUP: ${GOTRUE_DISABLE_SIGNUP:-false}
+      GOTRUE_SMS_AUTOCONFIRM: ${GOTRUE_SMS_AUTOCONFIRM:-false}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgresql://authenticator:${POSTGRES_PASSWORD}@db:${POSTGRES_PORT}/postgres
+      GOTRUE_LOG_LEVEL: info
+      GOTRUE_ANALYTICS_LOG_ENABLED: ${GOTRUE_ANALYTICS_LOG_ENABLED:-true}
+      GOTRUE_ANALYTICS_URL: http://analytics:4000
+      GOTRUE_ANALYTICS_API_KEY: ${LOGFLARE_API_KEY}
+      GOTRUE_ANALYTICS_SCHEMA: _analytics
+      GOTRUE_EMAIL_ENABLED: ${GOTRUE_EMAIL_ENABLED:-true}
+      GOTRUE_EMAIL_PASSWORD: ${GOTRUE_EMAIL_PASSWORD}
+      GOTRUE_EMAIL_HOST: ${GOTRUE_EMAIL_HOST}
+      GOTRUE_EMAIL_PORT: ${GOTRUE_EMAIL_PORT}
+      GOTRUE_EMAIL_USERNAME: ${GOTRUE_EMAIL_USERNAME}
+      GOTRUE_EMAIL_SENDER: ${GOTRUE_EMAIL_SENDER}
+      GOTRUE_EMAIL_ADMIN_EMAILS: ${GOTRUE_EMAIL_ADMIN_EMAILS}
+      GOTRUE_SMS_PROVIDER: ${GOTRUE_SMS_PROVIDER}
+      GOTRUE_SMS_GATEWAY_API_KEY: ${GOTRUE_SMS_GATEWAY_API_KEY}
+      GOTRUE_SMS_GATEWAY_URL: ${GOTRUE_SMS_GATEWAY_URL}
+      GOTRUE_SMS_TEMPLATE: ${GOTRUE_SMS_TEMPLATE}
+      GOTRUE_SMS_FROM: ${GOTRUE_SMS_FROM}
+      GOTRUE_EXTERNAL_AUTH_ENABLED: ${GOTRUE_EXTERNAL_AUTH_ENABLED:-true}
+      GOTRUE_PHONE_SIGNUP_ENABLED: ${GOTRUE_PHONE_SIGNUP_ENABLED:-true}
+    networks:
+      - n8n_supabase_default
+
+  realtime:
+    image: supabase/realtime:${REALTIME_VERSION:-2.27.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    environment:
+      PORT: 54323
+      DB_HOST: db
+      DB_PORT: ${POSTGRES_PORT}
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_DATABASE: postgres
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY}
+      ERLANG_COOKIE: ${ERLANG_COOKIE}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      FLY_REGION: ${FLY_REGION}
+      FLY_APP_NAME: ${FLY_APP_NAME}
+      PHX_HOST: ${PHX_HOST}
+      PHX_SERVER: "true"
+      LOG_LEVEL: info
+      API_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+      ANALYTICS_ENABLED: ${ANALYTICS_ENABLED:-true}
+      ANALYTICS_API_KEY: ${LOGFLARE_API_KEY}
+      ANALYTICS_HOST: http://analytics:4000
+      ANALYTICS_SCHEMA: _analytics
+    networks:
+      - n8n_supabase_default
 
   analytics:
     image: supabase/logflare:1.4.0
@@ -10,14 +129,7 @@
     restart: unless-stopped
     depends_on:
       db:
-        # Disable this if you are using an external Postgres database
         condition: service_healthy
-    # Uncomment to use Big Query backend for analytics
-    # volumes:
-    #   - type: bind
-    #     source: ${PWD}/gcloud.json
-    #     target: /opt/app/rel/logflare/bin/gcloud.json
-    #     read_only: true
     environment:
       LOGFLARE_NODE_HOST: 127.0.0.1
       DB_USERNAME: supabase_admin
@@ -30,18 +142,100 @@
       LOGFLARE_SINGLE_TENANT: true
       LOGFLARE_SUPABASE_MODE: true
       LOGFLARE_MIN_CLUSTER_SIZE: 1
-
-      # Comment variables to use Big Query backend for analytics
       POSTGRES_BACKEND_URL: postgresql://supabase_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/_supabase
       POSTGRES_BACKEND_SCHEMA: _analytics
       LOGFLARE_FEATURE_FLAG_OVERRIDE: multibackend=true
-      # Uncomment to use Big Query backend for analytics
-      # GOOGLE_PROJECT_ID: ${GOOGLE_PROJECT_ID}
-      # GOOGLE_PROJECT_NUMBER: ${GOOGLE_PROJECT_NUMBER}
     networks:
       - n8n_supabase_default
 
-# ... (rest of the file unchanged)
+  studio:
+    image: supabase/studio:${STUDIO_VERSION:-20240515-65e4b7e}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    environment:
+      STUDIO_PG_META_URL: http://db:${POSTGRES_PORT}
+      STUDIO_PG_META_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+      STUDIO_PG_META_DB_USER: postgres
+      STUDIO_PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      STUDIO_PG_META_DB_NAME: postgres
+      STUDIO_LOGFLARE_API_KEY: ${LOGFLARE_API_KEY}
+      STUDIO_LOGFLARE_HOST: http://analytics:4000
+      STUDIO_LOGFLARE_SCHEMA: _analytics
+    networks:
+      - n8n_supabase_default
+
+  meta:
+    image: supabase/postgres-meta:${POSTGRES_META_VERSION:-0.81.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: ${POSTGRES_PORT}
+      PG_META_DB_NAME: postgres
+      PG_ANALYTICS_ENABLED: ${PG_ANALYTICS_ENABLED:-true}
+      PG_ANALYTICS_HOST: http://analytics:4000
+      PG_ANALYTICS_API_KEY: ${LOGFLARE_API_KEY}
+      PG_ANALYTICS_SCHEMA: _analytics
+    networks:
+      - n8n_supabase_default
+
+  functions:
+    image: supabase/edge-functions:${FUNCTIONS_VERSION:-2.4.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: ${POSTGRES_PORT}
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: postgres
+      FUNCTION_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+      ANALYTICS_ENABLED: ${ANALYTICS_ENABLED:-true}
+      ANALYTICS_API_KEY: ${LOGFLARE_API_KEY}
+      ANALYTICS_HOST: http://analytics:4000
+      ANALYTICS_SCHEMA: _analytics
+    networks:
+      - n8n_supabase_default
+
+  # Uncomment to enable the Kong gateway
+  # gateway:
+  #   image: supabase/gateway:${GATEWAY_VERSION:-0.77.0}
+  #   restart: unless-stopped
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   ports:
+  #     - "54322:54322"
+  #   environment:
+  #     GATEWAY_AUTH_API_KEY: ${GATEWAY_AUTH_API_KEY}
+  #     GATEWAY_AUTH_JWT_SECRET: ${GOTRUE_JWT_SECRET}
+  #     GATEWAY_DB_HOST: db
+  #     GATEWAY_DB_PORT: ${POSTGRES_PORT}
+  #     GATEWAY_DB_USER: postgres
+  #     GATEWAY_DB_PASSWORD: ${POSTGRES_PASSWORD}
+  #     GATEWAY_DB_NAME: postgres
+  #     GATEWAY_LOG_LEVEL: info
+  #   networks:
+  #     - n8n_supabase_default
+
+volumes:
+  db:
 
 networks:
   n8n_supabase_default:
